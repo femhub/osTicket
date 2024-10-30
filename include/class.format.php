@@ -335,9 +335,10 @@ class Format {
                   ':<(a|span) (name|style)="(mso-bookmark\:)?_MailEndCompose">(.+)?<\/(a|span)>:', # Drop _MailEndCompose
                   ':<div dir=(3D)?"ltr">(.*?)<\/div>(.*):is', # drop Gmail "ltr" attributes
                   ':data-cid="[^"]*":',         # drop image cid attributes
-                  '(position:[^!";]+;?)',
+                  '(position: ?(-webkit-)?(static|relative|fixed|absolute|sticky|initial|inherit);?)', # Position styling
+                  ':[\x{2002}-\x{200B}]+:u',    # unicode spaces
             ),
-            array('', '', '', '', '<html', '$4', '$2 $3', '', ''),
+            array('', '', '', '', '<html', '$4', '$2 $3', '', '', ' '),
             $html);
 
         // HtmLawed specific config only
@@ -359,7 +360,7 @@ class Format {
             $config['elements'] .= '+iframe';
             $config['spec'] = 'iframe=-*,height,width,type,style,src(match="`^(https?:)?//(www\.)?('
                 .implode('|', $whitelist)
-                .')/?([^@]*)$`i"),frameborder'.($options['spec'] ? '; '.$options['spec'] : '').',allowfullscreen';
+                .')(\?|/|#)([^@]*)$`i"),frameborder'.($options['spec'] ? '; '.$options['spec'] : '').',allowfullscreen';
         }
 
         return Format::html($html, $config);
@@ -368,16 +369,16 @@ class Format {
     static function localizeInlineImages($text) {
         // Change file.php urls back to content-id's
         return preg_replace(
-            '`src="(?:https?:/)?(?:/[^/"]+)*?/file\\.php\\?(?:\w+=[^&]+&(?:amp;)?)*?key=([^&]+)[^"]*`',
-            'src="cid:$1', $text);
+            '`<img src="(?:https?:/)?(?:/[^/"]+)*?/file\\.php\\?(?:\w+=[^&"]+&(?:amp;)?)*?key=([^&]+)[^"]*`',
+            '<img src="cid:$1', $text);
     }
 
     static function sanitize($text, $striptags=false, $spec=false) {
+        // Localize inline images before sanitizing content
+        $text = self::localizeInlineImages($text);
 
         //balance and neutralize unsafe tags.
         $text = Format::safe_html($text, array('spec' => $spec));
-
-        $text = self::localizeInlineImages($text);
 
         //If requested - strip tags with decoding disabled.
         return $striptags?Format::striptags($text, false):$text;
@@ -536,7 +537,8 @@ class Format {
                 '/[\x{23E0}-\x{23EF}]/u',   # More Buttons
                 '/[\x{2310}-\x{231F}]/u',   # Hourglass/Watch
                 '/[\x{1000B6}]/u',          # Private Use Area (Plane 16)
-                '/[\x{2322}-\x{232F}]/u'    # Keyboard
+                '/[\x{2322}-\x{232F}]/u',   # Keyboard
+                '/[\x{00B0}|\x{00A9}]/u'    # Degrees/Copyright
             ), '', $text);
     }
 
@@ -584,18 +586,19 @@ class Format {
     }
 
 
-    static function viewableImages($html, $options=array()) {
+    static function viewableImages($html, $options=array(), $format=false) {
         $cids = $images = array();
         $options +=array(
                 'disposition' => 'inline');
-        return preg_replace_callback('/"cid:([\w._-]{32})"/',
+        $html = preg_replace_callback('/("|&quot;)cid:([\w._-]{32})("|&quot;)/',
         function($match) use ($options, $images) {
-            if (!($file = AttachmentFile::lookup($match[1])))
+            if (!($file = AttachmentFile::lookup($match[2])))
                 return $match[0];
 
             return sprintf('"%s" data-cid="%s"',
-                $file->getDownloadUrl($options), $match[1]);
+                $file->getDownloadUrl($options), $match[2]);
         }, $html);
+        return $format ? Format::htmlchars($html, true) : $html;
     }
 
 
@@ -756,6 +759,7 @@ class Format {
         if ($cfg && $cfg->isForce24HourTime())
             $format = str_replace('X', 'R', $format);
 
+        // TODO: Deprecated; replace this soon
         return strftime($format, $timestamp);
     }
 

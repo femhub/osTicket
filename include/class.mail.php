@@ -315,8 +315,8 @@ namespace osTicket\Mail {
             // Attempt to connect to the mail server
             $connect = $setting->getConnectionConfig();
             // Let's go Brandon
-            parent::connect($connect['host'], $connect['port'],
-                    $connect['ssl']);
+            parent::__construct($connect['host'], $connect['port'],
+                    $connect['ssl'], true);
             // Attempt authentication based on MailBoxAccount settings
             $auth = $setting->getAuthCredentials();
             switch (true) {
@@ -325,7 +325,9 @@ namespace osTicket\Mail {
                         throw new Exception('cannot login, user or password wrong');
                     break;
                 case $auth instanceof OAuth2AuthCredentials:
-                    if (!$this->oauth2Auth($auth->getAccessToken()))
+                    // Get OAuth2 Authentication Request
+                    $authen = $auth->getAuthRequest($setting->getUser());
+                    if (!$this->oauth2Auth($authen))
                         throw new Exception('OAuth2 Authentication Error');
                     break;
                 default:
@@ -342,7 +344,7 @@ namespace osTicket\Mail {
         }
 
         abstract public function __construct($accountSetting);
-        abstract protected function oauth2Auth(AccessToken $token);
+        abstract protected function oauth2Auth($authen);
     }
 
     class ImapMailboxProtocol extends ImapProtocol {
@@ -360,9 +362,8 @@ namespace osTicket\Mail {
           * S: A01 (OK|NO|BAD)
           * [connection continues...]
           */
-         private function oauth2Auth(AccessToken $token) {
-             $this->sendRequest('AUTHENTICATE', ['XOAUTH2',
-                    $token->getAuthRequest()]);
+         private function oauth2Auth($authen) {
+             $this->sendRequest('AUTHENTICATE', ['XOAUTH2', $authen]);
              while (true) {
                  $matches = [];
                  $response = '';
@@ -399,14 +400,14 @@ namespace osTicket\Mail {
           * S: (+OK|-ERR|+ {msg})
           * [connection continues...]
           */
-         public function oauth2Auth(AccessToken $token) {
+         public function oauth2Auth($authen) {
              $this->sendRequest('AUTH XOAUTH2');
              while (true) {
                 $response = $this->readLine();
                 $matches = [];
                 if ($response == '+') {
                     // Send xOAuthRequest
-                    $this->sendRequest($token->getAuthRequest());
+                    $this->sendRequest($authen);
                 } elseif (preg_match("/^\+OK /i", $response)) {
                     return true;
                 } elseif (preg_match('/^-ERR (.*+)$/i',
@@ -514,7 +515,7 @@ namespace osTicket\Mail {
          *
          */
         public function getRawEmail(int $i) {
-            return $this->getRawHeader($i) . $this->getRawContent($i);
+            return trim($this->getRawHeader($i)) . "\r\n\r\n" . $this->getRawContent($i);
         }
 
         /*
@@ -656,7 +657,10 @@ namespace osTicket\Mail {
         // Build out SmtpOptions options based on SmtpAccount Settings
         private function buildOptions(AccountSetting $setting) {
             // Dont send 'QUIT' on __destruct()
-            $config = ['use_complete_quit' => false];
+            $config = [
+                'use_complete_quit' => false,
+                'novalidatecert' => true
+            ];
             $connect = $setting->getConnectionConfig();
             $auth = $setting->getAuthCredentials();
             switch (true) {
@@ -704,29 +708,6 @@ namespace osTicket\Mail {
     class Sendmail extends SendmailTransport {
         public function __construct($options) {
             parent::__construct($options);
-        }
-
-        /*
-         * prepareHeaders($message)
-         *
-         * This is a temp fix needed for Windows installs until we upgrade
-         * to the latest version of Laminas Mail which already has the fix -
-         * the version we use currently doesn't strip the headers on Windows.
-         *
-         * TODO: Remove once Laminas Mail is upgraded.
-         */
-        protected function prepareHeaders(Mail\Message $message) {
-            // Clone message just incase upstream needs the headers intact
-            $message = clone $message;
-            // Remove "to" and "subject" headers before headers are prepared
-            // and passed to MTA. It's necessary since the headers in question
-            // are set directly via PHP mail() function - leaving them results
-            // in duplicate headers.
-            $message->getHeaders()->removeHeader('To');
-            $message->getHeaders()->removeHeader('Subject');
-            // Ask upstream to prepare the headers - it checks for From
-            // address injection etc.
-            return parent::prepareHeaders($message);
         }
 
         public function sendMessage(Message $message) {
@@ -851,6 +832,12 @@ namespace osTicket\Mail {
             return $this->token;
         }
 
+        public function getAuthRequest($user=null) {
+            return $this->getToken()
+                ? $this->getToken()->getAuthRequest($user)
+                : null;
+        }
+
         public function getAccessToken($signature=false) {
            $token = $this->getToken();
            // check signature if requested
@@ -909,6 +896,10 @@ namespace osTicket\Mail {
 
             // Set errors to null to clear validation
             $this->errors = null;
+        }
+
+        public function getUser() {
+            return $this->account->getEmail()->getEmail();
         }
 
         public function getName() {

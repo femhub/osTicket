@@ -253,7 +253,7 @@ class ApiController extends Controller {
                 return $this->exerr(415, __('Unsupported data format'));
         }
 
-        if (!($data = $parser->parse($stream))) {
+        if (!($data = $parser->parse($stream)) || !is_array($data)) {
             $this->exerr(400, $parser->lastError());
         }
 
@@ -387,8 +387,8 @@ class ApiXmlDataParser extends XmlDataParser {
     function fixup($current) {
         global $cfg;
 
-		if($current['ticket'])
-			$current = $current['ticket'];
+        if (isset($current['ticket']))
+            $current = $current['ticket'];
 
         if (!is_array($current))
             return $current;
